@@ -1,0 +1,36 @@
+<?php
+/**
+ * @file
+ * Provides a UI client for SOAP services
+ */
+
+/**
+ * Publish our testing UI and ajax callbacks.
+ *
+ * hook_menu()
+ */
+function soap_client_menu() {
+  $id_count = 1;
+  $op_count = $id_count + 2;
+
+  $items['soap/%wsclient_service/operation/%wsclient_ui_operation/invoke'] = array(
+    'title' => 'test operation',
+    'page callback' => 'drupal_get_form',
+    'page arguments' => array('soap_client_operation_invoke', $id_count, $op_count),
+    'load arguments' => array($id_count),
+    'access arguments' => array('access content'),
+    'file' => 'soap_client.inc',
+    'file path' => drupal_get_path('module', 'soap_client'),
+  );
+
+  $items['soap/%wsclient_service'] = array(
+    'title' => 'view operations',
+    'page callback' => 'drupal_get_form',
+    'page arguments' => array('soap_client_operation_viewer', $id_count),
+    'load arguments' => array($id_count),
+    'access arguments' => array('access content'),
+    'file' => 'soap_client.inc',
+    'file path' => drupal_get_path('module', 'soap_client'),
+  );
+  return $items;
+}
