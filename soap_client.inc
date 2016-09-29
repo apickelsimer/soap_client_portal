@@ -1,9 +1,8 @@
 <?php
 /**
  * @file
- * Utility functions for running the tester UI for web services.
+ * Utility functions for displaying and testing SOAP services
  */
-
 
 /**
  * FAPI form used to display the options and the results of calling a web
@@ -110,7 +109,73 @@ function soap_client_operation_invoke($form, $form_state, $service, $operation) 
 }
 
 /**
- * FAPI form used to display all operations of a service
+ * FAPI form used to display the properties of a datatype
+ */
+function soap_client_type_viewer($form, $form_state, $service, $type){
+    
+  $strings = array(
+  '!service_label' => $service->label,
+  '!type_label' => $type['label'],
+  );
+
+  drupal_set_title(t("Testing Web Service : !service_label : !type_label()", $strings));
+  $form  = array();
+
+  $form['header-title'] = array(
+  '#markup' => '<h2>' . $type['name'] . '</h2><br>',
+  );
+
+   $rows = array();
+    $types = soapclient_datatypes();
+    foreach ($type['property info'] as $name => $info) {
+      $row = array();
+      $row[] = array('data' => array(
+        '#theme' => 'entity_ui_overview_item',
+        '#label' => $name,
+        '#name' => $name,
+      ));
+
+      $rows[] = $row;
+    }
+
+    $row = array();
+    // @todo description help text for operations, data types
+    $form['types'] = array(
+      '#access' => TRUE,
+      '#tree' => TRUE,
+      '#theme' => 'table',
+      '#empty' => t('None'),
+      '#caption' => t('Properties'),
+      '#rows' => $rows,
+      '#header' => t('Properties'),
+      '#weight' => 50,
+    );
+    // Add some table styling from Rules.
+    $form['types']['#attributes']['class'][] = 'table table-striped';
+    $form['types']['#attached']['css'][] = drupal_get_path('module', 'soap_client') . '/ui/ui.css';
+
+    /* hide this for now
+    $form['properties'] = array(
+      '#tree' => TRUE,
+      '#element_validate' => array('wsclient_ui_validate_parameters'),
+      //'#theme' => 'wsclient_ui_property_form',
+      '#title' => t('Properties'),
+      '#description' => t('Each property will be shown for the data type below.'),
+    );
+    $types = soapclient_ui_types();
+    if (isset($type['property info'])) {
+      foreach ($type['property info'] as $name => $info) {
+        //$form['properties']['items'][$name] = _soapclient_ui_property_row($service, $types, $name, $info);
+        $form['properties']['items'][$name] = _soapclient_ui_property_row_new($name);
+      }
+    }
+    */
+
+  return $form;
+}
+
+/**
+ * FAPI form used to display all operations and datatypes of a service
  */
 function soap_client_operation_viewer($form, $form_state, $service) {
   $strings = array(
@@ -197,7 +262,7 @@ function soap_client_operation_viewer($form, $form_state, $service) {
           '#label' => $datatype['label'],
           '#name' => $name,
           '#url' => array(
-            'path' => '#',
+            'path' => '/soap/' . $service->name . '/type/' . $name,
             'options' => array(),
           ),
         ));
@@ -225,11 +290,10 @@ function soap_client_operation_viewer($form, $form_state, $service) {
 /**
  * FAPI form used to display all services that are managed
  */
-function soap_client_services_viewer($form, $form_state, $service) {
+function soap_client_services_viewer($form, $form_state) {
   drupal_set_title(t("Web Services"));
-    //to-do Pull from Entity to list services
-    //Here we will list all of the available services
 
+    //to-do: Find and list all published services
     return $form;
 }
 
@@ -335,6 +399,66 @@ function soap_client_label_sort($data_info, $label_key = 'label') {
 }
 
 /**
+ * Returns a list of available data types for service parameters, return
+ * values or data type properties. Entities are excluded.
+ *
+ * @param $hidden
+ *   Flag to indicate whether the special 'hidden' data type should be added to
+ *   the list as well.
+ */
+function soapclient_datatypes($hidden = FALSE) {
+  $cache = rules_get_cache();
+  $data_info = $cache['data_info'];
+  $entity_info = entity_get_info();
+  // Remove entities.
+  $data_info = array_diff_key($data_info, $entity_info);
+  unset($data_info['entity']);
+  // Remove the generic list type.
+  unset($data_info['list']);
+  $options = array();
+  foreach ($data_info as $type => $properties) {
+    // Do not add lists as this handled by the "multiple" checkbox.
+    if (strpos($type, 'list<') !== 0) {
+      $options[$type] = $properties['label'];
+    }
+  }
+  if ($hidden) {
+    // Add special 'hidden' data type
+    $options['hidden'] = t('hidden');
+  }
+  natcasesort($options);
+  return $options;
+}
+
+/**
+ * Generates a row in the properties table.
+ */
+function _soapclient_ui_property_row($service, $types, $name = '', $info = array()) {
+
+  $property['name'] = array(
+    '#type' => 'textfield',
+    '#disabled' => TRUE,
+    '#size' => 40,
+    '#default_value' => $name,
+  );
+  return $property;
+}
+
+/**
+ * Generates a row in the properties table.
+ */
+function _soapclient_ui_property_row_new($name) {
+
+  $property['name'] = array(
+    '#type' => 'textfield',
+    '#disabled' => TRUE,
+    '#size' => 40,
+    '#default_value' => $name,
+  );
+  return $property;
+}
+
+/**
  * A mini form element representing the given data type.
  * textfield for most things, but nested fieldsets for complex types.
  *
@@ -404,3 +528,4 @@ function wsclient_tester_data_entry_form($label, $type, $description, $data, $da
     );
   }
 }
+
