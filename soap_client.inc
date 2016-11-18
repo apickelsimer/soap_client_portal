@@ -1,4 +1,6 @@
 <?php
+
+//libraries_load("jsonpath");
 /**
  * @file
  * Utility functions for displaying and testing SOAP services
@@ -9,15 +11,17 @@
  * service.
  */
 function soap_client_operation_invoke($form, $form_state, $service, $operation) {
+
+
   $strings = array(
     '!service_label' => $service->label,
     '!operation_label' => $operation['label'],
   );
-  drupal_set_title(t("Testing Web Service : !service_label : !operation_label()", $strings));
+  drupal_set_title(t("!service_label : !operation_label()", $strings));
   $form  = array();
-
+  
   $form['header-title'] = array(
-  '#markup' => '<h2>' . $operation['label'] . '</h2><br>',
+  '#markup' => '<h2>Operation: ' . $operation['label'] . '</h2><br>',
   );
 
   /* hide this for now
@@ -36,13 +40,17 @@ function soap_client_operation_invoke($form, $form_state, $service, $operation) 
     '#value' => t("Enter the parameters to the !operation_label service here. It's up to you to get the data types right. No type validation is done at this end, as it's a debugger to let you throw various errors at the web service and see how it responds.", $strings),
   );
 
+  //custom css for form parameters
+  $form['parameters']['#attached']['css'][] = drupal_get_path('module', 'soap_client') . '/ui/ui.css'; 
+  
   // Deal with complex types.
   // Each complex type may require its own mini-form for data entry,
   // and these may be nested.
   $datatypes = $service->datatypes;
   foreach ($operation['parameter'] as $param => $info) {
-    $form['parameters'][$param] = wsclient_tester_data_entry_form($param, $info['type'], @$info['description'], @$form_state['values']['parameters'], $datatypes);
+      $form['parameters'][$param] = soap_client_request_data($param, $info['type'], @$info['description'], @$form_state['values']['parameters'], $datatypes, @$info['required']);
   }
+
   $form['execute'] = array(
     '#type' => 'submit',
     '#value' => 'Execute Request',
@@ -74,13 +82,13 @@ function soap_client_operation_invoke($form, $form_state, $service, $operation) 
   );
 
   $form['transaction']['request']['header'] = array(
-    '#markup' => 'Headers go here',
+    '#markup' => 'Request SOAP Headers',
     '#prefix' => '<pre>',
     '#suffix' => '</pre>',
   );
 
   $form['transaction']['request']['packet'] = array(
-    '#markup' => 'Packet goes here',
+    '#markup' => 'Request SOAP Envelope',
     '#prefix' => '<pre>',
     '#suffix' => '</pre>',
   );
@@ -92,18 +100,330 @@ function soap_client_operation_invoke($form, $form_state, $service, $operation) 
     '#title' => 'Response',
   );
   $form['transaction']['response']['header'] = array(
-    '#markup' => 'ResponseHeaders go here',
+    '#markup' => 'Response SOAP Headers',
     '#prefix' => '<pre>',
     '#suffix' => '</pre>',
   );
 
   $form['transaction']['response']['packet'] = array(
-    '#markup' => 'ResponsePayload goes here',
+    '#markup' => 'Response SOAP Envelope',
     '#prefix' => '<pre>',
     '#suffix' => '</pre>',
   );
 
   $form['transaction']['response']['data'] = array();
+
+    //add some markup here
+  $form['resp_spacer'] = array(
+  '#markup' => '<br/><br/>',
+  );
+
+
+  /* hide this for now
+    $form['response'] = array(
+      '#type' => 'fieldset',
+      '#title' => 'Response Definition',
+    );
+
+    //display the result parameters
+    $form['response']['results'] = array(
+      '#title' => 'result',
+      '#type' => 'container',
+      '#tree' => TRUE,
+    );
+    $form['response']['results']['#attached']['css'][] = drupal_get_path('module', 'soap_client') . '/ui/ui.css'; 
+    
+
+    // Deal with complex types.
+    // Each complex type may require its own mini-form for data entry,
+    // and these may be nested.
+    
+
+    $datatypes = $service->datatypes;
+      $form['response']['results']['definition'] = soap_client_response_data($operation['result'], $operation['result']['type'], @$resinfo['description'], @$form_state['values']['parameters'], $datatypes, @$resinfo['required']);
+  */
+
+  return $form;
+}
+
+/**
+ * FAPI form used to display the options and the results of calling a web
+ * service during the certification process.
+ */
+function soap_client_certify_operation_invoke($form, $form_state, $service, $certification, $certification_step) {
+
+  require_once jsonpath_parser_library_path();
+
+  $certs = array();
+  $operations = $service->operations;
+  $operation = NULL;
+  foreach ($operations as $op=> $opinfo) {
+    if ($opinfo['certification'])
+    {
+      if ($opinfo['certification'][$certification]) {
+        if ($opinfo['certification'][$certification]['index'] === $certification_step){
+          $operation = $operations[$op];
+          $excludeFields = explode(",", $opinfo['certification'][$certification]['excludeFields']);
+          $includeFields = $opinfo['certification'][$certification]['includeFields'];
+          array_push($certs, $opinfo);
+          if($opinfo['certification'][$certification]['sessionID']){
+            //set flag to store session
+            $session_var = $opinfo['certification'][$certification]['sessionID'];
+          }
+        }
+      }
+    }
+  }
+
+  //get default values from service entity
+  $defaultValues = $operation['certification'][$certification]['default'];
+  //$_SESSION = NULL;
+
+  //parse xml response from session if available
+  if ($_SESSION['lastResponse']) {
+    $xml = simplexml_load_string($_SESSION['lastResponse']);
+    $responseArray = $xml->children('soapenv', TRUE)->Body->children('ac', TRUE);
+    $json = json_encode($responseArray);
+    $responseArray = json_decode($json, TRUE);
+
+    //grab the last response and cache
+    $responseID = array_shift(array_keys($responseArray));
+
+    if (isset($_SESSION['cached_responses'])) {
+      if (empty($_SESSION['cached_responses'])) {
+        //cache is empty but set
+        $_SESSION['cached_responses'] = $responseArray;
+      }
+      elseif (isset($_SESSION['cached_responses'][$responseID])) {
+        //response has been cached previously, update cache with new response
+        unset($_SESSION['cached_responses'][$responseID]);
+        $_SESSION['cached_responses'] = array_merge($_SESSION['cached_responses'], $responseArray);
+      }
+      else {
+        //some response has been cached before, add new response type to cache
+        if (isset($responseArray)) {
+          $_SESSION['cached_responses'] = array_merge($_SESSION['cached_responses'], $responseArray);
+        }
+      }
+    }
+    else {
+      //first cached response
+      $_SESSION['cached_responses'] = $responseArray;
+    }
+  }
+
+    //parse xml request from session if available
+    if ($_SESSION['lastRequest']) {
+      $xml_req = simplexml_load_string($_SESSION['lastRequest']);
+      $requestArray = $xml_req->children('SOAP-ENV', TRUE)->Body->children('ns1', TRUE);
+      $json = json_encode($requestArray);
+      $requestArray = json_decode($json, TRUE);
+
+      //grab the last response and cache
+      $requestID = array_shift(array_keys($$requestArray));
+
+      if (isset($_SESSION['cached_requests'])) {
+        if (empty($_SESSION['cached_requests'])) {
+          //cache is empty but set
+          $_SESSION['cached_requests'] = $requestArray;
+        }
+        elseif (isset($_SESSION['cached_requests'][$requestID])) {
+          //response has been cached previously, update cache with new response
+          unset($_SESSION['cached_requests'][$requestID]);
+          $_SESSION['cached_requests'] = array_merge($_SESSION['cached_requests'], $requestArray);
+        }
+        else {
+          //some response has been cached before, add new response type to cache
+          if (isset($requestArray)) {
+            $_SESSION['cached_requests'] = array_merge($_SESSION['cached_requests'], $requestArray);
+          }
+        }
+      }
+      else {
+        //first cached response
+        $_SESSION['cached_requests'] = $requestArray;
+      }
+
+
+  }
+    //kill last response & request
+    //$_SESSION['lastResponse'] = NULL;
+    //$_SESSION['lastRequest'] = NULL;
+
+
+  //dpm($_SESSION,"SESSION VARIABLES");
+
+  //add values from session to default values to be be loaded on form
+  $cached_responses = array_merge($_SESSION['cached_responses'],$_SESSION['cached_requests']);
+  if($includeFields)
+  {
+    $incReq = array();
+    foreach ($cached_responses as $cache_resp => $cache_info) {
+
+      foreach($includeFields as $incField => $incFieldInfos)
+      {
+        foreach($incFieldInfos as $incFieldInfo => $incFieldMappings)
+          {
+            if ($incField === $cache_resp)
+            {
+              //$test = jsonPath($cache_info, "$.feeInfo.deliveryOption")[0];
+              $incReq[$incFieldMappings] = jsonPath($cache_info, "$." . $incFieldInfo)[0];
+            }
+          }
+        }
+    }
+    if (isset($defaultValues)) {
+      $defaultValues = array_merge($defaultValues, $incReq);
+    }
+    else{
+      $defaultValues = $incReq;
+    }
+  }
+
+  $strings = array(
+    '!service_label' => $service->label,
+    '!operation_label' => $operation['label'],
+  );
+  drupal_set_title(t("!service_label : !operation_label()", $strings));
+  $form  = array();
+  
+  $form['header-title'] = array(
+  '#markup' => '<h2>Certification : ' . $service->label . " : " . $operation['label'] . '</h2><br>',
+  );
+
+  $form['header-description'] = array(
+  '#markup' => $operation['certification'][$certification]['description'],
+  );
+
+
+  /* hide this for now
+    $form['uri'] = array(
+      '#title' => 'Service URI',
+      '#type' => 'textfield',
+      '#disabled' => TRUE,
+      '#value' => $service->url,
+    );
+  */
+
+  $form['parameters'] = array(
+    '#title' => 'Parameters',
+    '#type' => 'container',
+    '#tree' => TRUE,
+    '#value' => t("Enter the parameters to the !operation_label service here. It's up to you to get the data types right. No type validation is done at this end, as it's a debugger to let you throw various errors at the web service and see how it responds.", $strings),
+  );
+
+  //custom css for form parameters
+  $form['parameters']['#attached']['css'][] = drupal_get_path('module', 'soap_client') . '/ui/ui.css'; 
+  
+  // Deal with complex types.
+  // Each complex type may require its own mini-form for data entry,
+  // and these may be nested.
+  $datatypes = $service->datatypes;
+  foreach ($operation['parameter'] as $param => $info) {
+      $form['parameters'][$param] = soap_client_certify_data($param, $info['type'], @$info['description'], @$form_state['values']['parameters'], $datatypes, @$info['required'], $excludeFields, $defaultValues);
+  }
+
+  $form['execute'] = array(
+    '#type' => 'submit',
+    '#value' => 'Execute Request',
+    '#ajax' => array(
+      'event' => 'click',
+      'callback' => 'wsclient_tester_prepare_request_callback',
+      'wrapper' => 'edit-transaction',
+      'method' => 'replace',
+      'effect' => 'fade',
+    ),
+  );
+
+  //add some markup here
+  $form['spacer'] = array(
+  '#markup' => '<br/><br/>',
+  );
+
+  // Set up result panes. Content for these usually gets filled in via ajax.
+
+  $form['transaction'] = array(
+    '#type' => 'fieldset',
+    '#title' => 'Transaction',
+    '#attributes' => array('id' => 'edit-transaction'),
+  );
+
+  $form['transaction']['request'] = array(
+    '#type' => 'fieldset',
+    '#title' => 'Request',
+  );
+
+  $form['transaction']['request']['header'] = array(
+    '#markup' => 'Request SOAP Headers',
+    '#prefix' => '<pre>',
+    '#suffix' => '</pre>',
+  );
+
+  $form['transaction']['request']['packet'] = array(
+    '#markup' => 'Request SOAP Envelope',
+    '#prefix' => '<pre>',
+    '#suffix' => '</pre>',
+  );
+
+  $form['transaction']['request']['data'] = array();
+
+  $form['transaction']['response'] = array(
+    '#type' => 'fieldset',
+    '#title' => 'Response',
+  );
+  $form['transaction']['response']['header'] = array(
+    '#markup' => 'Response SOAP Headers',
+    '#prefix' => '<pre>',
+    '#suffix' => '</pre>',
+  );
+
+  $form['transaction']['response']['packet'] = array(
+    '#markup' => 'Response SOAP Envelope',
+    '#prefix' => '<pre>',
+    '#suffix' => '</pre>',
+  );
+
+  $form['transaction']['response']['data'] = array();
+
+    //add some markup here
+  $form['resp_spacer'] = array(
+  '#markup' => '<br/><br/>',
+  );
+
+  //todo: check if this is last element in certs array
+  $intstep = (int)$certification_step;
+  $nextstep = $intstep + 1;
+  //$nextstep = 1;
+  $proceedUrl = "/soap/" . $service->name . "/certify/" . $certification . "/" . $nextstep;
+
+    //add some markup here
+  $form['resp_spacer'] = array(
+  '#markup' =>   '<br><a role="button" class="btn btn-primary" border="square" href="' . $proceedUrl . '" style="padding:15px 10px !important;"><i class="fa fa-files-o"></i>Proceed to Next Step of Certification</button></a>',
+  );
+
+  /* hide this for now
+    $form['response'] = array(
+      '#type' => 'fieldset',
+      '#title' => 'Response Definition',
+    );
+
+    //display the result parameters
+    $form['response']['results'] = array(
+      '#title' => 'result',
+      '#type' => 'container',
+      '#tree' => TRUE,
+    );
+    $form['response']['results']['#attached']['css'][] = drupal_get_path('module', 'soap_client') . '/ui/ui.css'; 
+    
+
+    // Deal with complex types.
+    // Each complex type may require its own mini-form for data entry,
+    // and these may be nested.
+    
+
+    $datatypes = $service->datatypes;
+      $form['response']['results']['definition'] = soap_client_response_data($operation['result'], $operation['result']['type'], @$resinfo['description'], @$form_state['values']['parameters'], $datatypes, @$resinfo['required']);
+  */
 
   return $form;
 }
@@ -118,7 +438,7 @@ function soap_client_type_viewer($form, $form_state, $service, $type){
   '!type_label' => $type['label'],
   );
 
-  drupal_set_title(t("Testing Web Service : !service_label : !type_label()", $strings));
+  drupal_set_title(t("!service_label : !type_label()", $strings));
   $form  = array();
 
   $form['header-title'] = array(
@@ -178,6 +498,11 @@ function soap_client_type_viewer($form, $form_state, $service, $type){
  * FAPI form used to display all operations and datatypes of a service
  */
 function soap_client_operation_viewer($form, $form_state, $service) {
+  //debugging ops and service
+  $ops = $service->operations;
+  firep($ops);
+  firep($service);
+
   $strings = array(
     '!service_label' => $service->label,
   );
@@ -301,8 +626,26 @@ function soap_client_services_viewer($form, $form_state) {
  * Callback for the test from 'prepare' button.
  */
 function wsclient_tester_prepare_request_callback($form, $form_state) {
+  firep($form_state);
   $service = $form_state['build_info']['args'][0];
-  $operation = $form_state['build_info']['args'][1];
+
+  if ($form_state['build_info']['form_id'] === 'soap_client_certify_operation_invoke'){
+    //look up operation
+    $operations = $service->operations;
+    $certification = $form_state['build_info']['args'][1];
+    $certification_step = $form_state['build_info']['args'][2];
+    foreach ($operations as $op => $opinfo) {
+      if ($opinfo['certification'][$certification]['index'] === $certification_step){
+        $operation = $operations[$op];
+      }
+    }
+  }
+  else {
+    $operation = $form_state['build_info']['args'][1];
+  }
+
+  //firep($operation);
+  //firep($service);
 
   // Convert the form values into a data structure suitable for making the query.
   // Magic?
@@ -312,6 +655,7 @@ function wsclient_tester_prepare_request_callback($form, $form_state) {
   if (!empty($form_state['values']['parameters'])) {
     $args = $form_state['values']['parameters'];
   }
+
 
   if ($service->type == 'soap') {
     // The service will have an endpoint that will have a SOAPClient.
@@ -326,10 +670,14 @@ function wsclient_tester_prepare_request_callback($form, $form_state) {
   // Ready to actually invoke the call
   $timer_before = microtime();
   try {
-    $response = $service->invoke($operation['name'], $args);
+    if($operation['name']){
+    $response = $service->invoke($operation['name'], $args);}
+    elseif($operation['label']){
+      $response = $service->invoke($operation['label'], $args);
+    }
   }
   catch (Exception $e) {
-    $response = $e->getMessage();
+    //$response = $e->getMessage();
   }
   $timer_duration = $timer_before - microtime();
 
@@ -352,8 +700,11 @@ function wsclient_tester_prepare_request_callback($form, $form_state) {
   elseif ($service->type == 'soap') {
     $element['request']['header']['#markup'] = $service->endpoint()->client()->__getLastRequestHeaders();
     $element['request']['packet']['#markup'] = htmlspecialchars(wsclient_tester_prettify_xml($service->endpoint()->client()->__getLastRequest()));
+    $_SESSION['lastRequest'] = $service->endpoint()->client()->__getLastRequest();
+
     $element['response']['header']['#markup'] = $service->endpoint()->client()->__getLastResponseHeaders();
     $element['response']['packet']['#markup'] = htmlspecialchars(wsclient_tester_prettify_xml($service->endpoint()->client()->__getLastResponse()));
+    $_SESSION['lastResponse'] = $service->endpoint()->client()->__getLastResponse();
   }
 
   /* hide this for now
@@ -459,14 +810,15 @@ function _soapclient_ui_property_row_new($name) {
 }
 
 /**
- * A mini form element representing the given data type.
+ * A mini form element representing the request data type.
  * textfield for most things, but nested fieldsets for complex types.
  *
  * This recurses through complex types until it hits core types.
  *
  * @return a FAPI form fragment.
  */
-function wsclient_tester_data_entry_form($label, $type, $description, $data, $datatypes) {
+function soap_client_request_data($label, $type, $description, $data, $datatypes, $required) {
+
   if (isset($datatypes[$type])) {
     // Build a complex type.
     $datatype = $datatypes[$type];
@@ -475,9 +827,35 @@ function wsclient_tester_data_entry_form($label, $type, $description, $data, $da
       '#title' => check_plain("$label ({$datatype['label']})"),
       '#collapsible' => TRUE,
     );
+
+      global $user;
+      $currentUser = $user->mail;
+      $developer = entity_load('developer', array($currentUser), array(), TRUE);
+      $attributes = $developer[$currentUser]->attributes;
+      //dpm($attributes, "attributes");
+
     foreach ($datatype['property info'] as $field_id => $field_info) {
       // Recurse and get each bit to render its own input element.
-      $element[$field_id] = wsclient_tester_data_entry_form($field_id, $field_info['type'], @$field_info['description'], $data[$field_id], $datatypes);
+      //pre-populate fields with developer data
+      if (array_key_exists($field_id, $attributes))
+        {
+          $one = $attributes[$field_id];
+          firep("$field_id - true - $one");
+          $element[$field_id] = soap_client_request_data($field_id, $field_info['type'], @$field_info['description'], $attributes[$field_id], $datatypes, @$field_info['required']);
+        }
+      elseif($field_id == "timeStamp")
+        {
+          $dt = new DateTime();
+          $dt->setTimeZone(new DateTimeZone('UTC'));
+          $timeStamp = $dt->format('c');
+          $element[$field_id] = soap_client_request_data($field_id, $field_info['type'], @$field_info['description'], $timeStamp, $datatypes, @$field_info['required']);
+        }
+      else
+        {
+          $two = $attributes[$field_id];
+          firep("$field_id - false - $two ");
+          $element[$field_id] = soap_client_request_data($field_id, $field_info['type'], @$field_info['description'], $data[$field_id], $datatypes, @$field_info['required']);
+        }
     }
     return $element;
   }
@@ -494,7 +872,7 @@ function wsclient_tester_data_entry_form($label, $type, $description, $data, $da
     );
     for ($field_id = 0; $field_id < 3; $field_id++) {
       // Recurse and get each bit to render its own input element
-      $element[$field_id] = wsclient_tester_data_entry_form($field_id, $actual_type, NULL, $data[$field_id], $datatypes);
+      $element[$field_id] = soap_client_request_data($field_id, $actual_type, NULL, $data[$field_id], $datatypes);
       $element[$field_id]['#collapsed'] = TRUE;
     }
     return $element;
@@ -502,30 +880,366 @@ function wsclient_tester_data_entry_form($label, $type, $description, $data, $da
   elseif ($type == 'text_formatted') {
     return array(
       '#type' => 'textarea',
-      '#title' => t("%label (%type)", array('%label' => $label, '%type' => $type)),
+      '#title' => t("Property: %label", array('%label' => $label)),
       '#default_value' => $data,
-      '#description' => $description,
+      '#description' => t("Type: %type <br> Description: %description <br> Required: %required", array('%label' => $label, '%type' => $type, '%description' => $description, '%required' => $required)),
     );
   }
   elseif ($type == 'boolean') {
+
+    if (isset($required)){
+      if ($required == 'true')
+      {
+        return array(
+          '#type' => 'select',
+          '#title' => t("Property: %label", array('%label' => $label)),
+          '#default_value' => $data,
+          // Defining false first so it's the default when setting up a form.
+          '#options' => array('0' => 'false', '1' => 'true', '' => '(Not Set)'),
+          '#description' => t("Type: %type <br> Description: %description <br> Required: %required", array('%label' => $label, '%type' => $type, '%description' => $description, '%required' => $required)),
+          '#required' => TRUE,
+        );
+      }
+      else if ($required == 'not allowed') {
+        return array(
+          '#type' => 'select',
+          '#title' => t("Property: %label", array('%label' => $label)),
+          '#default_value' => NULL,
+          '#value' => NULL,
+          '#description' => t("Type: %type <br> Description: %description <br> Required: %required", array('%label' => $label, '%type' => $type, '%description' => $description, '%required' => $required)),
+          '#required' => FALSE,
+          '#disabled' => TRUE,
+          '#value' => NULL,
+        );
+      }
+      else{
+      //set to optional
+        return array(
+          '#type' => 'select',
+          '#title' => t("Property: %label", array('%label' => $label)),
+          '#default_value' => $data,
+          // Defining false first so it's the default when setting up a form.
+          '#options' => array('0' => 'false', '1' => 'true', '' => '(Not Set)'),
+          '#description' => t("Type: %type <br> Description: %description <br> Required: %required", array('%label' => $label, '%type' => $type, '%description' => $description, '%required' => $required)),
+          '#required' => FALSE
+        );
+      }
+    }
+    else{
+      //set to optional
     return array(
       '#type' => 'select',
-      '#title' => t("%label (%type)", array('%label' => $label, '%type' => $type)),
+      '#title' => t("Property: %label", array('%label' => $label)),
       '#default_value' => $data,
       // Defining false first so it's the default when setting up a form.
-      '#options' => array('false' => 'false', 'true' => 'true'),
-      '#description' => $description,
+      '#options' => array('0' => 'false', '1' => 'true', '' => '(Not Set)'),
+      '#description' => t("Type: %type <br> Description: %description <br> Required: (Not Set)", array('%label' => $label, '%type' => $type, '%description' => $description, '%required' => $required)),
     );
+    }
+
   }
   else {
-    // A textfield will normally do for any other primitives.
-    return array(
-      '#type' => 'textfield',
-      '#title' => t("%label (%type)", array('%label' => $label, '%type' => $type)),
-      '#default_value' => $data,
-      '#size' => 20,
-      '#description' => $description,
-    );
+    // A textfield will normally do for any other primitives. 
+    if (isset($required)){
+      if ($required == 'true')
+      {
+         return array(
+          '#type' => 'textfield',
+          '#title' => t("Property: %label", array('%label' => $label)),
+          '#description' => t("Type: %type <br> Description: %description <br> Required: %required", array('%label' => $label, '%type' => $type, '%description' => $description, '%required' => $required)),
+          '#required' => TRUE,
+          '#default_value' => $data,
+          '#size' => 20
+        );
+      }
+      else if ($required == 'not allowed') {
+      //set to optional
+       return array(
+        '#type' => 'textfield',
+        '#title' => t("Property: %label", array('%label' => $label)),
+          '#description' => t("Type: %type <br> Description: %description <br> Required: %required", array('%label' => $label, '%type' => $type, '%description' => $description, '%required' => $required)),
+        '#required' => FALSE,
+        '#disabled' => TRUE,
+        '#default_value' => NULL,
+        '#value' => NULL,
+        '#size' => 20
+      );
+      }
+      else{
+      //required is set to a value other than true or not allowed so field is optional
+       return array(
+        '#type' => 'textfield',
+        '#title' => t("Property: %label", array('%label' => $label)),
+          '#description' => t("Type: %type <br> Description: %description <br> Required: %required", array('%label' => $label, '%type' => $type, '%description' => $description, '%required' => $required)),
+        '#required' => FALSE,
+        '#default_value' => $data,
+        //'#value' => NULL, //is_null('#value') ? '#value' : NULL,
+        '#size' => 20
+      );
+      }
+    }
+    else{
+      //required parameter not set so field is optional
+       return array(
+        '#type' => 'textfield',
+        '#title' => t("Property: %label", array('%label' => $label)),
+        '#description' => t("Type: %type <br> Description: %description <br> Required: (Not Set)", array('%label' => $label, '%type' => $type, '%description' => $description)),
+        '#required' => FALSE,
+        '#default_value' => $data,
+        //'#value' => NULL,
+        '#size' => 20
+      );
+    }
   }
 }
 
+function soap_client_certify_data($label, $type, $description, $data, $datatypes, $required, $excludeFields, $defaultValues) {
+
+
+  if (isset($datatypes[$type])) {
+    // Build a complex type.
+    $datatype = $datatypes[$type];
+    $element = array(
+      '#type' => 'fieldset',
+      '#title' => check_plain("$label ({$datatype['label']})"),
+      '#collapsible' => TRUE,
+    );
+
+    global $user;
+    $currentUser = $user->mail;
+    $developer = entity_load('developer', array($currentUser), array(), TRUE);
+    $devattr = $developer[$currentUser]->attributes;
+
+    if ($defaultValues) { 
+      $attributes = array_merge($devattr,$defaultValues);
+    }
+    else{
+      $attributes = $devattr;
+    }
+
+
+    foreach ($datatype['property info'] as $field_id => $field_info) {
+
+      if (in_array($field_id, $excludeFields))
+      {
+        //skip
+        //return null;
+      }
+      // Recurse and get each bit to render its own input element.
+      //pre-populate fields with developer data
+      elseif (array_key_exists($field_id, $attributes))
+      {
+        //$one = $attributes[$field_id];
+        //firep("$field_id - true - $one");
+        $element[$field_id] = soap_client_certify_data($field_id, $field_info['type'], @$field_info['description'], $attributes[$field_id], $datatypes, @$field_info['required'], $excludeFields, $defaultValues);
+      }
+      elseif($field_id == "timeStamp")
+      {
+        $dt = new DateTime();
+        $dt->setTimeZone(new DateTimeZone('UTC'));
+        $timeStamp = $dt->format('c');
+        $element[$field_id] = soap_client_certify_data($field_id, $field_info['type'], @$field_info['description'], $timeStamp, $datatypes, @$field_info['required'], $excludeFields, $defaultValues);
+      }
+      else
+      {
+        //$two = $attributes[$field_id];
+        //firep("$field_id - false - $two ");
+        $element[$field_id] = soap_client_certify_data($field_id, $field_info['type'], @$field_info['description'], $data[$field_id], $datatypes, @$field_info['required'], $excludeFields, $defaultValues);
+      }
+    }
+    return $element;
+  }
+  elseif (preg_match('/^list\<(.*)\>$/', $type, $matches)) {
+    // Strange notation, type="list<MyType>" means a list of those things.
+    // @see wsclient_soap_type_mapper()
+    // This becomes a numerically indexed array.
+    // Present it in the form as a nested list.
+    $actual_type = $matches[1];
+    $element = array(
+      '#type' => 'fieldset',
+      '#title' => t("List of %label (%type)", array('%label' => $label, '%type' => $type)),
+      '#collapsible' => TRUE,
+    );
+    for ($field_id = 0; $field_id < 3; $field_id++) {
+      // Recurse and get each bit to render its own input element
+      $element[$field_id] = soap_client_certify_data($field_id, $actual_type, NULL, $data[$field_id], $datatypes, @$field_id['required'], $excludeFields, $defaultValues);
+      $element[$field_id]['#collapsed'] = TRUE;
+    }
+    return $element;
+  }
+  elseif ($type == 'text_formatted') {
+    return array(
+      '#type' => 'textarea',
+      '#title' => t("Property: %label", array('%label' => $label)),
+      '#default_value' => $data,
+      '#description' => t("Type: %type <br> Description: %description <br> Required: %required", array('%label' => $label, '%type' => $type, '%description' => $description, '%required' => $required)),
+    );
+  }
+  elseif ($type == 'boolean') {
+
+    if (isset($required)){
+      if ($required == 'true')
+      {
+        return array(
+          '#type' => 'select',
+          '#title' => t("Property: %label", array('%label' => $label)),
+          '#default_value' => $data,
+          // Defining false first so it's the default when setting up a form.
+          '#options' => array('0' => 'false', '1' => 'true', '' => '(Not Set)'),
+          '#description' => t("Type: %type <br> Description: %description <br> Required: %required", array('%label' => $label, '%type' => $type, '%description' => $description, '%required' => $required)),
+          '#required' => TRUE,
+        );
+      }
+      else if ($required == 'not allowed') {
+        return array(
+          '#type' => 'select',
+          '#title' => t("Property: %label", array('%label' => $label)),
+          '#default_value' => NULL,
+          '#value' => NULL,
+          '#description' => t("Type: %type <br> Description: %description <br> Required: %required", array('%label' => $label, '%type' => $type, '%description' => $description, '%required' => $required)),
+          '#required' => FALSE,
+          '#disabled' => TRUE,
+          '#value' => NULL,
+        );
+      }
+      else{
+        //set to optional
+        return array(
+          '#type' => 'select',
+          '#title' => t("Property: %label", array('%label' => $label)),
+          '#default_value' => $data,
+          // Defining false first so it's the default when setting up a form.
+          '#options' => array('0' => 'false', '1' => 'true', '' => '(Not Set)'),
+          '#description' => t("Type: %type <br> Description: %description <br> Required: %required", array('%label' => $label, '%type' => $type, '%description' => $description, '%required' => $required)),
+          '#required' => FALSE
+        );
+      }
+    }
+    else{
+      //set to optional
+      return array(
+        '#type' => 'select',
+        '#title' => t("Property: %label", array('%label' => $label)),
+        '#default_value' => $data,
+        // Defining false first so it's the default when setting up a form.
+        '#options' => array('0' => 'false', '1' => 'true', '' => '(Not Set)'),
+        '#description' => t("Type: %type <br> Description: %description <br> Required: (Not Set)", array('%label' => $label, '%type' => $type, '%description' => $description, '%required' => $required)),
+      );
+    }
+
+  }
+  else {
+    // A textfield will normally do for any other primitives.
+    if (isset($required)){
+      if ($required == 'true')
+      {
+        return array(
+          '#type' => 'textfield',
+          '#title' => t("Property: %label", array('%label' => $label)),
+          '#description' => t("Type: %type <br> Description: %description <br> Required: %required", array('%label' => $label, '%type' => $type, '%description' => $description, '%required' => $required)),
+          '#required' => TRUE,
+          '#default_value' => $data,
+          '#size' => 20
+        );
+      }
+      else if ($required == 'not allowed') {
+        //set to optional
+        return array(
+          '#type' => 'textfield',
+          '#title' => t("Property: %label", array('%label' => $label)),
+          '#description' => t("Type: %type <br> Description: %description <br> Required: %required", array('%label' => $label, '%type' => $type, '%description' => $description, '%required' => $required)),
+          '#required' => FALSE,
+          '#disabled' => TRUE,
+          '#default_value' => NULL,
+          '#value' => NULL,
+          '#size' => 20
+        );
+      }
+      else{
+        //required is set to a value other than true or not allowed so field is optional
+        return array(
+          '#type' => 'textfield',
+          '#title' => t("Property: %label", array('%label' => $label)),
+          '#description' => t("Type: %type <br> Description: %description <br> Required: %required", array('%label' => $label, '%type' => $type, '%description' => $description, '%required' => $required)),
+          '#required' => FALSE,
+          '#default_value' => $data,
+          //'#value' => NULL, //is_null('#value') ? '#value' : NULL,
+          '#size' => 20
+        );
+      }
+    }
+    else{
+      //required parameter not set so field is optional
+      return array(
+        '#type' => 'textfield',
+        '#title' => t("Property: %label", array('%label' => $label)),
+        '#description' => t("Type: %type <br> Description: %description <br> Required: (Not Set)", array('%label' => $label, '%type' => $type, '%description' => $description)),
+        '#required' => FALSE,
+        '#default_value' => $data,
+        //'#value' => NULL,
+        '#size' => 20
+      );
+    }
+  }
+}
+
+/**
+ * A mini form element representing the response data type.
+ * textfield for most things, but nested fieldsets for complex types.
+ *
+ * This recurses through complex types until it hits core types.
+ *
+ * @return a FAPI form fragment.
+ */
+function soap_client_response_data($label, $type, $description, $data, $datatypes) {
+  if (isset($datatypes[$type])) {
+    // Build a complex type.
+    $datatype = $datatypes[$type];
+    $element = array(
+      '#type' => 'fieldset',
+      '#title' => check_plain("{$datatype['label']}"),
+      '#collapsible' => TRUE,
+      '#collapsed' => TRUE,
+    );
+    foreach ($datatype['property info'] as $field_id => $field_info) {
+      // Recurse and get each bit to render its own input element.
+      $element[$field_id] = soap_client_response_data($field_id, $field_info['type'], @$field_info['description'], $data[$field_id], $datatypes);
+    }
+    return $element;
+  }
+  elseif (preg_match('/^list\<(.*)\>$/', $type, $matches)) {
+    // Strange notation, type="list<MyType>" means a list of those things.
+    // @see wsclient_soap_type_mapper()
+    // This becomes a numerically indexed array.
+    // Present it in the form as a nested list.
+    $actual_type = $matches[1];
+    $element = array(
+      '#type' => 'fieldset',
+      '#title' => t("List of %label (%type)", array('%label' => $label, '%type' => $type)),
+      '#collapsible' => TRUE,
+    );
+    for ($field_id = 0; $field_id < 3; $field_id++) {
+      // Recurse and get each bit to render its own input element
+      $element[$field_id] = soap_client_response_data($field_id, $actual_type, NULL, $data[$field_id], $datatypes);
+      $element[$field_id]['#collapsed'] = TRUE;
+    }
+    return $element;
+  }
+  elseif ($type == 'text_formatted') {
+    return array(
+      '#markup' => t("<b>Property: %label</b> <br>Type: %type <br>Description: %description<br>", array('%label' => $label, '%type' => $type, '%description' => $description)),
+    );
+  }
+  elseif ($type == 'boolean') {
+      //set to optional
+        return array(
+        '#markup' => t("<b>Property: %label</b> <br>Type: %type <br>Description: %description<br>", array('%label' => $label, '%type' => $type, '%description' => $description)),
+        );
+  }
+  else {
+    // A textfield will normally do for any other primitives. 
+       return array(
+        '#markup' => t("<b>Property: %label</b> <br>Type: %type <br>Description: %description<br>", array('%label' => $label, '%type' => $type, '%description' => $description)),
+      );
+  }
+}

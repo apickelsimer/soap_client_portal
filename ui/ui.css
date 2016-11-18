@@ -10,3 +10,22 @@ caption {
     padding-bottom: 0.5em;
     text-align: left !important;
 }
+
+html input[disabled] {
+    cursor: default;
+    background-color: #F2F2F2 !important;
+    color: #C6C6C6;
+    border-color: #ddd;
+}
+
+.fieldset-legend {
+	padding-top: 10px;
+}
+
+.legend {
+	margin-bottom: 10px !important;
+}
+
+fieldset.collapsed {
+	height: 3em !important;
+}
